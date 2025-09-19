@@ -1,9 +1,43 @@
-use axum::{routing::get, Json, Router};
-use axum::routing::post;
+use axum::{
+    routing::get,
+    extract::{Query, Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json, Router,
+};
+use thiserror::Error;
 use serde::{Serialize, Deserialize};
-use axum::extract::{Query, Path, State};
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use serde_json::json;
+use std::{net::SocketAddr, sync::{Arc, Mutex}};
+use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+#[derive(Error, Debug)]
+enum ApiError {
+    #[error("User not found")]
+    UserNotFound,
+    #[error("Internal server error")]
+    ServerError,
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        match self {
+            ApiError::UserNotFound => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "User not found" })),
+            )
+                .into_response(),
+
+            ApiError::ServerError => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Internal server error" })),
+            )
+                .into_response(),
+        }
+    }
+}
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct User {
@@ -27,6 +61,11 @@ struct CreateUserResponse {
     message: String,
 }
 
+async fn list_users(State(state): State<AppState>) -> Json<Vec<User>> {
+    let users = state.users.lock().unwrap();
+    Json(users.clone())
+}
+
 async fn create_user(
     State(state): State<AppState>,
     Json(payload): Json<CreateUser>,
@@ -45,13 +84,16 @@ async fn create_user(
 async fn get_user(
     State(state): State<AppState>,
     Path(user_id): Path<usize>,
-) -> String {
-    let users = state.users.lock().unwrap();
+) -> Result<impl IntoResponse, ApiError> {
+    let users = state.users.lock().map_err(|_| ApiError::ServerError)?;
 
     if let Some(user) = users.get(user_id) {
-        format!("Found user: {} ({})", user.username, user.email)
+        Ok(Json(json!({
+            "username": user.username,
+            "email": user.email
+        })))
     } else {
-        format!("No user found with index {}", user_id)
+        Err(ApiError::UserNotFound)
     }
 }
 
@@ -69,29 +111,37 @@ struct HelloResponse {
     message: String,
 }
 
+async fn root() -> Json<HelloResponse> {
+    Json(HelloResponse {
+        message: "Hello from Spencer!".to_string(),
+    })
+}
+
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
     let state = AppState {
         users: Arc::new(Mutex::new(Vec::new())),
     };
 
     let app = Router::new()
-    .route("/", get(root))
-    .route("/greet", get(greet))
-    .route("/users/:user_id", get(get_user))
-    .route("/users", post(create_user))
-    .with_state(state);
+        .route("/", get(root))
+        .route("/greet", get(greet))
+        .route("/users/:user_id", get(get_user))
+        .route("/users", get(list_users).post(create_user))
+        .with_state(state)
+        .layer(TraceLayer::new_for_http());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     println!("Listening on {}", addr);
 
-    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
-        .await
-        .unwrap();
-}
-
-async fn root() -> Json<HelloResponse> {
-    Json(HelloResponse {
-        message: "Hello from Spencer!".to_string(),
-    })
+    axum::serve(
+        tokio::net::TcpListener::bind(addr).await.unwrap(),
+        app.into_make_service(),
+    )
+    .await
+    .unwrap();
 }
