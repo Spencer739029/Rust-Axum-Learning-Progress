@@ -12,6 +12,46 @@ use std::{net::SocketAddr, sync::{Arc, Mutex}};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+#[derive(Deserialize)]
+struct UpdateUser {
+    username: Option<String>,
+    email: Option<String>,
+}
+
+async fn update_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<usize>,
+    Json(payload): Json<UpdateUser>,
+) -> Result<Json<User>, ApiError> {
+    let mut users = state.users.lock().map_err(|_| ApiError::ServerError)?;
+
+    if let Some(user) = users.get_mut(user_id) {
+        if let Some(new_username) = payload.username {
+            user.username = new_username;
+        }
+        if let Some(new_email) = payload.email {
+            user.email = new_email;
+        }
+        Ok(Json(user.clone()))
+    } else {
+        Err(ApiError::UserNotFound)
+    }
+}
+
+async fn delete_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<usize>,
+) -> Result<StatusCode, ApiError> {
+    let mut users = state.users.lock().map_err(|_| ApiError::ServerError)?;
+
+    if user_id < users.len() {
+        users.remove(user_id);
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::UserNotFound)
+    }
+}
+
 #[derive(Error, Debug)]
 enum ApiError {
     #[error("User not found")]
@@ -130,10 +170,11 @@ async fn main() {
     let app = Router::new()
         .route("/", get(root))
         .route("/greet", get(greet))
-        .route("/users/:user_id", get(get_user))
         .route("/users", get(list_users).post(create_user))
+        .route("/users/:user_id", get(get_user).put(update_user).delete(delete_user))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
+
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     println!("Listening on {}", addr);
