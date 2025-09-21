@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Server Status</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; }
+        ul { list-style: none; padding: 0; }
+        li { margin-bottom: 5px; }
+        input, button { margin: 5px 0; padding: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Server Status</h1>
+    <p id="user-count">Loading users...</p>
+    <ul id="user-list"></ul>
+
+    <h2>Add User</h2>
+    <input type="text" id="username" placeholder="Username">
+    <input type="text" id="real_name" placeholder="Real Name">
+    <input type="email" id="email" placeholder="Email">
+    <button onclick="addUser()">Add User</button>
+
+    <script>
+        const apiBase = 'http://127.0.0.1:3000';
+        let sessionToken = localStorage.getItem('sessionToken');
+
+        async function login(username) {
+            const response = await fetch(`${apiBase}/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                sessionToken = data.token;
+                localStorage.setItem('sessionToken', sessionToken);
+            } else {
+                alert('Login failed');
+            }
+        }
+
+        async function fetchUsers() {
+            const response = await fetch(`${apiBase}/users`);
+            const users = await response.json();
+            document.getElementById('user-count').innerText = `Total users: ${users.length}`;
+            const userList = document.getElementById('user-list');
+            userList.innerHTML = '';
+            users.forEach((user, index) => {
+                const li = document.createElement('li');
+                li.innerHTML = `${index + 1}: ${user.username} (${user.real_name}) - ${user.email} 
+                    <button onclick="deleteUser(${index})">Delete</button>`;
+                userList.appendChild(li);
+            });
+        }
+
+        async function addUser() {
+            const username = document.getElementById('username').value;
+            const real_name = document.getElementById('real_name').value;
+            const email = document.getElementById('email').value;
+
+            if (!sessionToken) {
+                const loginName = prompt("Enter your username for login:");
+                await login(loginName);
+            }
+
+            const response = await fetch(`${apiBase}/users`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-session-token': sessionToken
+                },
+                body: JSON.stringify({ username, real_name, email })
+            });
+
+            if (response.ok) {
+                document.getElementById('username').value = '';
+                document.getElementById('real_name').value = '';
+                document.getElementById('email').value = '';
+                fetchUsers();
+            } else {
+                alert('Failed to add user');
+            }
+        }
+
+        async function deleteUser(id) {
+            if (!sessionToken) {
+                const loginName = prompt("Enter your username for login:");
+                await login(loginName);
+            }
+
+            const response = await fetch(`${apiBase}/users/${id}`, {
+                method: 'DELETE',
+                headers: { 'x-session-token': sessionToken }
+            });
+
+            if (response.ok) {
+                fetchUsers();
+            } else {
+                alert('Failed to delete user. You can only delete users you created.');
+            }
+        }
+
+        // Load users initially
+        fetchUsers();
+    </script>
+</body>
+</html>
